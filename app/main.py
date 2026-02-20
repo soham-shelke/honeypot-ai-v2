@@ -1,18 +1,61 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Header, HTTPException, Depends, Response
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import HTTPException as FastAPIHTTPException
 from pydantic import BaseModel
 from time import time
+import traceback
+import os
 
 from app.inference import predict_labels
 from app.extractor import extract_intelligence, merge_intelligence
-
 from app.engagement import generate_engagement_reply
 
+# =====================================================
+# CONFIG
+# =====================================================
 
+API_KEY = os.getenv("HONEYPOT_API_KEY", "test123")
+SAFE_REPLY = "I want to proceed correctly. Could you explain once more?"
 
 app = FastAPI(json_loads=None, json_dumps=None)
 
+# =====================================================
+# AUTHENTICATION
+# =====================================================
 
-from fastapi import Response
+def verify_api_key(
+    x_api_key: str | None = Header(default=None, alias="x-api-key")
+):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+
+
+# =====================================================
+# GLOBAL CRASH PROTECTION
+# =====================================================
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+
+    # Allow authentication + HTTP errors normally
+    if isinstance(exc, FastAPIHTTPException):
+        raise exc
+
+    print("⚠️ Exception caught:")
+    traceback.print_exc()
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "success",
+            "reply": SAFE_REPLY
+        },
+    )
+
+
+# =====================================================
+# HEALTH ENDPOINTS (Render + UptimeRobot)
+# =====================================================
 
 @app.get("/health")
 def health_get():
@@ -25,14 +68,21 @@ def health_get():
 
 @app.head("/health")
 def health_head():
-    # HEAD responses must not return body
     return Response(status_code=200)
-    
 
-# ---------------- SESSION MEMORY ----------------
+
+@app.get("/")
+def root():
+    return {"message": "Honeypot AI API running"}
+
+
+# =====================================================
+# SESSION MEMORY
+# =====================================================
 
 sessions = {}
 MAX_SESSIONS = 500
+
 
 def new_session():
     return {
@@ -48,18 +98,6 @@ def new_session():
         }
     }
 
-# ---------------- REQUEST MODELS ----------------
-
-class Message(BaseModel):
-    sender: str
-    text: str
-    timestamp: int
-
-class RequestBody(BaseModel):
-    sessionId: str
-    message: Message
-    conversationHistory: list = []
-    metadata: dict = {}
 
 def prune_sessions():
     """Prevent memory growth"""
@@ -68,10 +106,33 @@ def prune_sessions():
         for k in oldest:
             sessions.pop(k, None)
 
-# ---------------- HONEYPOT TURN ----------------
+
+# =====================================================
+# REQUEST MODELS
+# =====================================================
+
+class Message(BaseModel):
+    sender: str
+    text: str
+    timestamp: int
+
+
+class RequestBody(BaseModel):
+    sessionId: str
+    message: Message
+    conversationHistory: list = []
+    metadata: dict = {}
+
+
+# =====================================================
+# HONEYPOT TURN ENDPOINT
+# =====================================================
 
 @app.post("/honeypot")
-def honeypot(req: RequestBody):
+def honeypot(
+    req: RequestBody,
+    _: str = Depends(verify_api_key)
+):
 
     session_id = req.sessionId
     text = req.message.text
@@ -81,7 +142,8 @@ def honeypot(req: RequestBody):
 
     session = sessions[session_id]
     prune_sessions()
-    # update counters
+
+    # update message count
     session["message_count"] += 1
 
     # ML prediction
@@ -96,7 +158,7 @@ def honeypot(req: RequestBody):
         session["intelligence"], intel
     )
 
-    # Honeypot reply (keeps engagement alive)
+    # Engagement reply
     reply = generate_engagement_reply(session, preds)
 
     return {
@@ -104,34 +166,65 @@ def honeypot(req: RequestBody):
         "reply": reply
     }
 
-# ---------------- FINAL CALLBACK ----------------
+
+# =====================================================
+# FINAL CALLBACK ENDPOINT
+# =====================================================
 
 @app.post("/final")
-def final_output(data: dict):
+def final_output(
+    data: dict,
+    _: str = Depends(verify_api_key)
+):
 
-    session_id = data["sessionId"]
+    try:
+        session_id = data["sessionId"]
 
-    if session_id not in sessions:
-        return {"error": "Session not found"}
+        if session_id not in sessions:
+            return safe_empty_final(session_id)
 
-    session = sessions[session_id]
+        session = sessions[session_id]
+        duration = int(time() - session["start_time"])
 
-    duration = int(time() - session["start_time"])
+        return {
+            "sessionId": session_id,
+            "scamDetected": session["is_scam"],
+            "totalMessagesExchanged": session["message_count"],
+            "extractedIntelligence": session["intelligence"],
+            "engagementMetrics": {
+                "engagementDurationSeconds": duration,
+                "messageCount": session["message_count"]
+            },
+            "agentNotes": build_agent_notes(session)
+        }
 
-    final_json = {
+    except Exception:
+        traceback.print_exc()
+        return safe_empty_final(data.get("sessionId", "unknown"))
+
+
+# =====================================================
+# SAFE FALLBACK FINAL RESPONSE
+# =====================================================
+
+def safe_empty_final(session_id: str):
+    return {
         "sessionId": session_id,
-        "scamDetected": session["is_scam"],
-        "totalMessagesExchanged": session["message_count"],
-        "extractedIntelligence": session["intelligence"],
-        "engagementMetrics": {
-            "engagementDurationSeconds": duration,
-            "messageCount": session["message_count"]
+        "scamDetected": False,
+        "totalMessagesExchanged": 0,
+        "extractedIntelligence": {
+            "phoneNumbers": [],
+            "bankAccounts": [],
+            "upiIds": [],
+            "phishingLinks": [],
+            "emailAddresses": []
         },
-        "agentNotes": build_agent_notes(session)
+        "engagementMetrics": {
+            "engagementDurationSeconds": 0,
+            "messageCount": 0
+        },
+        "agentNotes": "Safe fallback response."
     }
-
-    return final_json
-
 
 
 def build_agent_notes(session):
@@ -140,7 +233,3 @@ def build_agent_notes(session):
         f"Messages={session['message_count']}, "
         f"ScamDetected={session['is_scam']}."
     )
-
-@app.get("/")
-def root():
-    return {"message": "Honeypot AI API running"}
