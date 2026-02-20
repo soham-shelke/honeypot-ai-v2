@@ -7,15 +7,27 @@ from app.extractor import extract_intelligence, merge_intelligence
 
 from app.engagement import generate_engagement_reply
 
+
+
 app = FastAPI(json_loads=None, json_dumps=None)
 
+
+from fastapi import Response
+
 @app.get("/health")
-def health_check():
+def health_get():
     return {
         "status": "ok",
         "service": "honeypot-ai",
         "modelLoaded": True
     }
+
+
+@app.head("/health")
+def health_head():
+    # HEAD responses must not return body
+    return Response(status_code=200)
+    
 
 # ---------------- SESSION MEMORY ----------------
 
