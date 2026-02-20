@@ -8,6 +8,15 @@ from app.extractor import extract_intelligence, merge_intelligence
 from app.engagement import generate_engagement_reply
 
 app = FastAPI(json_loads=None, json_dumps=None)
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "ok",
+        "service": "honeypot-ai",
+        "modelLoaded": True
+    }
+
 # ---------------- SESSION MEMORY ----------------
 
 sessions = {}
@@ -119,3 +128,7 @@ def build_agent_notes(session):
         f"Messages={session['message_count']}, "
         f"ScamDetected={session['is_scam']}."
     )
+
+@app.get("/")
+def root():
+    return {"message": "Honeypot AI API running"}
