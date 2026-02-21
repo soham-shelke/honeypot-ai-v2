@@ -1,82 +1,67 @@
 import random
+from app.llm import generate_llm_reply
+# -------------------------------------------------
+# RESPONSE POOLS (GENERIC — NOT SCENARIO BASED)
+# -------------------------------------------------
 
-# ---------------- HUMAN-LIKE RESPONSE POOLS ----------------
-
-EARLY_STAGE = [
-    "I'm not fully understanding yet. Could you guide me step by step?",
-    "I'm new to this process. Please explain what I should do first.",
-    "Okay, I want to resolve this. What should I do now?"
+OPENING_RESPONSES = [
+    "I'm not sure I understand yet. Could you explain what happened?",
+    "That sounds serious. What should I do first?",
+    "I want to resolve this properly. Please guide me step by step."
 ]
 
-ASK_UPI = [
-    "I want to complete the payment. Can you confirm the UPI ID?",
-    "Before paying, please share the UPI details again.",
-    "Can you send the UPI ID so I can transfer correctly?"
+PAYMENT_PROBES = [
+    "Before I proceed, can you confirm the payment details again?",
+    "Where exactly should I send the payment?",
+    "I want to make sure I transfer correctly — can you share the account or UPI once more?"
 ]
 
-ASK_BANK = [
-    "Could you provide the bank account number for the transfer?",
-    "I may use bank transfer instead — can you share account details?",
+CONTACT_PROBES = [
+    "If something goes wrong, how can I contact you directly?",
+    "Is there a support number I should keep in case this fails?",
 ]
 
-ASK_LINK = [
-    "Please send the official link where I should complete this.",
-    "Where exactly should I update the details? Share the link please.",
+LINK_PROBES = [
+    "Can you send the official link again so I open the correct page?",
+    "Where should I complete the verification? Please share the link."
 ]
 
-ASK_PHONE = [
-    "If something goes wrong, which number should I contact?",
-    "Can I have a contact number in case payment fails?",
+VERIFICATION_PROBES = [
+    "Can you confirm your department or employee ID for verification?",
+    "Just to be safe, which team are you calling from?"
 ]
 
-IMP_VERIFICATION = [
-    "Can you confirm your employee ID for verification?",
-    "Which department are you calling from exactly?",
-]
-
-REWARD_PROBE = [
-    "Is any processing fee required before receiving the reward?",
-    "Do I need to pay anything to claim this prize?",
-]
-
-FALLBACK = [
-    "Okay, please explain the next step clearly.",
-    "I'm following. What should I do after that?",
-    "Alright, continue please."
+GENERIC_CONTINUE = [
+    "Okay, I'm following. What should I do next?",
+    "Alright, please continue.",
+    "I'm listening — what comes next?"
 ]
 
 
-def pick(options):
-    """Deterministic-safe random choice"""
-    return random.choice(options)
+# -------------------------------------------------
+# MAIN ENGAGEMENT LOGIC
+# -------------------------------------------------
 
+def generate_engagement_reply(session, preds, text):
 
-def generate_engagement_reply(session, preds):
+    turn = session["message_count"]
 
-    intel = session["intelligence"]
-    msg_count = session["message_count"]
+    # ---- FAST PATH (no LLM) ----
+    if turn <= 3:
+        return random.choice(OPENING_RESPONSES)
 
-    # -------- EARLY CONVERSATION --------
-    if msg_count < 3:
-        return pick(EARLY_STAGE)
+    # ---- USE LLM ONLY SOMETIMES ----
+    if turn % 3 == 0:
+        try:
+            return generate_llm_reply(text)
+        except Exception:
+            pass  # fallback safely
 
-    # -------- INTELLIGENCE TARGETING --------
-    if preds["asks_payment"] and not intel["upiIds"]:
-        return pick(ASK_UPI)
+    # ---- normal probing ----
+    if preds.get("asks_payment"):
+        return random.choice(PAYMENT_PROBES)
 
-    if preds["asks_payment"] and not intel["bankAccounts"]:
-        return pick(ASK_BANK)
+    if not session["intelligence"]["phoneNumbers"]:
+        return random.choice(CONTACT_PROBES)
 
-    if preds["urgency"] and not intel["phishingLinks"]:
-        return pick(ASK_LINK)
-
-    if not intel["phoneNumbers"]:
-        return pick(ASK_PHONE)
-
-    if preds["impersonation"]:
-        return pick(IMP_VERIFICATION)
-
-    if preds["reward_scam"]:
-        return pick(REWARD_PROBE)
-
-    return pick(FALLBACK)
+    return random.choice(GENERIC_CONTINUE)
