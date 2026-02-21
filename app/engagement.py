@@ -1,67 +1,66 @@
 import random
 from app.llm import generate_llm_reply
+
 # -------------------------------------------------
-# RESPONSE POOLS (GENERIC — NOT SCENARIO BASED)
+# RESPONSE POOLS
 # -------------------------------------------------
 
-OPENING_RESPONSES = [
-    "I'm not sure I understand yet. Could you explain what happened?",
+OPENING = [
     "That sounds serious. What should I do first?",
-    "I want to resolve this properly. Please guide me step by step."
+    "I want to resolve this properly. Please guide me step by step.",
+    "Okay, I understand. What should I do now?"
 ]
 
 PAYMENT_PROBES = [
-    "Before I proceed, can you confirm the payment details again?",
     "Where exactly should I send the payment?",
-    "I want to make sure I transfer correctly — can you share the account or UPI once more?"
+    "Can you confirm the payment details again?",
 ]
 
 CONTACT_PROBES = [
     "If something goes wrong, how can I contact you directly?",
-    "Is there a support number I should keep in case this fails?",
+    "Is there a support number I should keep?"
 ]
 
 LINK_PROBES = [
-    "Can you send the official link again so I open the correct page?",
-    "Where should I complete the verification? Please share the link."
+    "Can you send the verification link again?",
+    "Where should I complete this process?"
 ]
 
-VERIFICATION_PROBES = [
-    "Can you confirm your department or employee ID for verification?",
-    "Just to be safe, which team are you calling from?"
-]
-
-GENERIC_CONTINUE = [
-    "Okay, I'm following. What should I do next?",
+GENERIC = [
+    "I'm listening — what comes next?",
     "Alright, please continue.",
-    "I'm listening — what comes next?"
+    "Okay, I am following."
 ]
 
 
 # -------------------------------------------------
-# MAIN ENGAGEMENT LOGIC
+# SAFE ENGAGEMENT FUNCTION
 # -------------------------------------------------
 
 def generate_engagement_reply(session, preds, text):
 
     turn = session["message_count"]
+    intel = session["intelligence"]
 
-    # ---- FAST PATH (no LLM) ----
-    if turn <= 3:
-        return random.choice(OPENING_RESPONSES)
+    # ---- early turns (fast deterministic) ----
+    if turn <= 2:
+        return random.choice(OPENING)
 
-    # ---- USE LLM ONLY SOMETIMES ----
-    if turn % 3 == 0:
-        try:
-            return generate_llm_reply(text)
-        except Exception:
-            pass  # fallback safely
+    # ---- selective LLM usage ----
+    if turn >= 4 and turn % 4 == 0:
+        llm_reply = generate_llm_reply(text)
+        if isinstance(llm_reply, str) and llm_reply.strip():
+            return llm_reply
 
-    # ---- normal probing ----
+    # ---- intelligence probing ----
+    if not intel["phoneNumbers"]:
+        return random.choice(CONTACT_PROBES)
+
+    if not intel["phishingLinks"]:
+        return random.choice(LINK_PROBES)
+
     if preds.get("asks_payment"):
         return random.choice(PAYMENT_PROBES)
 
-    if not session["intelligence"]["phoneNumbers"]:
-        return random.choice(CONTACT_PROBES)
-
-    return random.choice(GENERIC_CONTINUE)
+    # ---- ALWAYS SAFE FALLBACK ----
+    return random.choice(GENERIC)
