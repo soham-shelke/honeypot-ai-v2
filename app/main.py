@@ -16,7 +16,7 @@ from app.engagement import generate_engagement_reply
 # =====================================================
 
 API_KEY = os.getenv("HONEYPOT_API_KEY", "test123")
-SAFE_REPLY = "Could you explain that again? I want to follow correctly."
+SAFE_REPLY = "Could you clarify that again?"
 
 app = FastAPI()
 
@@ -32,7 +32,7 @@ def verify_api_key(
 
 
 # =====================================================
-# GLOBAL CRASH PROTECTION
+# GLOBAL EXCEPTION HANDLER
 # =====================================================
 
 @app.exception_handler(Exception)
@@ -48,7 +48,6 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"status": "success", "reply": SAFE_REPLY},
     )
 
-
 # =====================================================
 # HEALTH
 # =====================================================
@@ -57,16 +56,9 @@ async def global_exception_handler(request: Request, exc: Exception):
 def health():
     return {"status": "ok"}
 
-
 @app.head("/health")
 def health_head():
     return Response(status_code=200)
-
-
-@app.get("/")
-def root():
-    return {"message": "Honeypot running"}
-
 
 # =====================================================
 # SESSION STORE
@@ -74,7 +66,6 @@ def root():
 
 sessions = {}
 MAX_SESSIONS = 500
-
 
 def new_session():
     return {
@@ -90,39 +81,56 @@ def new_session():
         }
     }
 
-
 def prune_sessions():
     if len(sessions) > MAX_SESSIONS:
         for k in list(sessions.keys())[:50]:
             sessions.pop(k, None)
 
-
 # =====================================================
-# MODELS
-# =====================================================
-
-class Message(BaseModel):
-    sender: str
-    text: str
-    timestamp: Union[int, str]  # SPEC FIX
-
-
-class RequestBody(BaseModel):
-    sessionId: str
-    message: Message
-    conversationHistory: list = []
-    metadata: dict = {}
-
-
-# =====================================================
-# HONEYPOT TURN
+# UNIFIED ENDPOINT
 # =====================================================
 
 @app.post("/honeypot")
-def honeypot(req: RequestBody, _: str = Depends(verify_api_key)):
+async def honeypot(
+    request: Request,
+    _: str = Depends(verify_api_key)
+):
 
-    sid = req.sessionId
-    text = req.message.text
+    body = await request.json()
+
+    print("\n----- INCOMING REQUEST -----")
+    print(body)
+    print("----------------------------\n")
+
+    # FINAL CALL (no message field)
+    if "message" not in body:
+
+        sid = body.get("sessionId")
+
+        if sid not in sessions:
+            return safe_final(sid)
+
+        session = sessions[sid]
+        duration = int(time() - session["start_time"])
+
+        response = {
+            "sessionId": sid,
+            "scamDetected": session["is_scam"],
+            "totalMessagesExchanged": session["message_count"],
+            "engagementDurationSeconds": duration,
+            "extractedIntelligence": session["intelligence"],
+            "agentNotes": build_agent_notes(session)
+        }
+
+        print("----- FINAL RESPONSE -----")
+        print(response)
+        print("--------------------------\n")
+
+        return response
+
+    # CONVERSATION TURN
+    sid = body["sessionId"]
+    text = body["message"]["text"]
 
     if sid not in sessions:
         sessions[sid] = new_session()
@@ -144,38 +152,16 @@ def honeypot(req: RequestBody, _: str = Depends(verify_api_key)):
 
     reply = generate_engagement_reply(session, preds)
 
-    return {"status": "success", "reply": reply}
+    response = {
+        "status": "success",
+        "reply": reply
+    }
 
+    print("----- TURN RESPONSE -----")
+    print(response)
+    print("-------------------------\n")
 
-# =====================================================
-# FINAL OUTPUT (SPEC EXACT FORMAT)
-# =====================================================
-
-@app.post("/final")
-def final_output(data: dict, _: str = Depends(verify_api_key)):
-
-    try:
-        sid = data["sessionId"]
-
-        if sid not in sessions:
-            return safe_final(sid)
-
-        session = sessions[sid]
-        duration = int(time() - session["start_time"])
-
-        return {
-            "sessionId": sid,
-            "scamDetected": session["is_scam"],
-            "totalMessagesExchanged": session["message_count"],
-            "engagementDurationSeconds": duration,
-            "extractedIntelligence": session["intelligence"],
-            "agentNotes": build_agent_notes(session)
-        }
-
-    except Exception:
-        traceback.print_exc()
-        return safe_final(data.get("sessionId", "unknown"))
-
+    return response
 
 # =====================================================
 # SAFE FALLBACK
@@ -194,9 +180,8 @@ def safe_final(sid):
             "phishingLinks": [],
             "emailAddresses": []
         },
-        "agentNotes": "Recovered safely from error."
+        "agentNotes": "Safe fallback."
     }
-
 
 def build_agent_notes(session):
     return (
