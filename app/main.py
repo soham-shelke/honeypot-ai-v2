@@ -1,11 +1,9 @@
 from fastapi import FastAPI, Request, Header, HTTPException, Depends, Response
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import HTTPException as FastAPIHTTPException
-from pydantic import BaseModel
 from time import time
 import traceback
 import os
-from typing import Union
 
 from app.inference import predict_labels
 from app.extractor import extract_intelligence, merge_intelligence
@@ -16,7 +14,8 @@ from app.engagement import generate_engagement_reply
 # =====================================================
 
 API_KEY = os.getenv("HONEYPOT_API_KEY", "test123")
-SAFE_REPLY = "Could you clarify that again?"
+
+SAFE_REPLY = "Could you explain that once more?"
 
 app = FastAPI()
 
@@ -30,17 +29,18 @@ def verify_api_key(
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
-
 # =====================================================
-# GLOBAL EXCEPTION HANDLER
+# GLOBAL ERROR HANDLER
 # =====================================================
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
 
+    # allow HTTP errors normally
     if isinstance(exc, FastAPIHTTPException):
         raise exc
 
+    print("\n⚠️ INTERNAL ERROR:")
     traceback.print_exc()
 
     return JSONResponse(
@@ -49,7 +49,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 # =====================================================
-# HEALTH
+# HEALTH ENDPOINT
 # =====================================================
 
 @app.get("/health")
@@ -61,7 +61,7 @@ def health_head():
     return Response(status_code=200)
 
 # =====================================================
-# SESSION STORE
+# SESSION MEMORY
 # =====================================================
 
 sessions = {}
@@ -77,8 +77,8 @@ def new_session():
             "bankAccounts": [],
             "upiIds": [],
             "phishingLinks": [],
-            "emailAddresses": []
-        }
+            "emailAddresses": [],
+        },
     }
 
 def prune_sessions():
@@ -87,22 +87,24 @@ def prune_sessions():
             sessions.pop(k, None)
 
 # =====================================================
-# UNIFIED ENDPOINT
+# MAIN SINGLE ENDPOINT
 # =====================================================
 
 @app.post("/honeypot")
 async def honeypot(
     request: Request,
-    _: str = Depends(verify_api_key)
+    _: str = Depends(verify_api_key),
 ):
 
     body = await request.json()
 
     print("\n----- INCOMING REQUEST -----")
     print(body)
-    print("----------------------------\n")
+    print("----------------------------")
 
-    # FINAL CALL (no message field)
+    # =================================================
+    # FINAL REQUEST (NO MESSAGE FIELD)
+    # =================================================
     if "message" not in body:
 
         sid = body.get("sessionId")
@@ -119,16 +121,19 @@ async def honeypot(
             "totalMessagesExchanged": session["message_count"],
             "engagementDurationSeconds": duration,
             "extractedIntelligence": session["intelligence"],
-            "agentNotes": build_agent_notes(session)
+            "agentNotes": build_agent_notes(session),
         }
 
-        print("----- FINAL RESPONSE -----")
+        print("\n----- FINAL RESPONSE -----")
         print(response)
-        print("--------------------------\n")
+        print("--------------------------")
 
         return response
 
+    # =================================================
     # CONVERSATION TURN
+    # =================================================
+
     sid = body["sessionId"]
     text = body["message"]["text"]
 
@@ -140,31 +145,34 @@ async def honeypot(
 
     session["message_count"] += 1
 
+    # ML prediction
     preds = predict_labels(text)
 
-    if preds["is_scam"] == 1:
+    if preds.get("is_scam") == 1:
         session["is_scam"] = True
 
+    # intelligence extraction
     intel = extract_intelligence(text)
     session["intelligence"] = merge_intelligence(
         session["intelligence"], intel
     )
 
-    reply = generate_engagement_reply(session, preds)
+    # engagement reply
+    reply = generate_engagement_reply(session, preds, text)
 
     response = {
         "status": "success",
-        "reply": reply
+        "reply": reply,
     }
 
-    print("----- TURN RESPONSE -----")
+    print("\n----- TURN RESPONSE -----")
     print(response)
-    print("-------------------------\n")
+    print("-------------------------")
 
     return response
 
 # =====================================================
-# SAFE FALLBACK
+# HELPERS
 # =====================================================
 
 def safe_final(sid):
@@ -178,13 +186,14 @@ def safe_final(sid):
             "bankAccounts": [],
             "upiIds": [],
             "phishingLinks": [],
-            "emailAddresses": []
+            "emailAddresses": [],
         },
-        "agentNotes": "Safe fallback."
+        "agentNotes": "Safe fallback.",
     }
 
 def build_agent_notes(session):
     return (
-        f"Conversation completed. Messages={session['message_count']}, "
+        f"Conversation completed. "
+        f"Messages={session['message_count']}, "
         f"ScamDetected={session['is_scam']}."
     )

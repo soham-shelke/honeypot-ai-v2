@@ -24,22 +24,23 @@ EMAIL_REGEX = re.compile(r"\b[\w\.-]+@[\w\.-]+\.\w+\b")
 
 def extract_intelligence(text: str):
 
-    # ---- phones first ----
+    # -------- phones ----------
     phones = PHONE_REGEX.findall(text)
 
-    # Normalize phone digits for filtering only
-    phone_digits = {
-        re.sub(r"\D", "", p) for p in phones
+    # last 10 digits of phones
+    phone_core_numbers = {
+        re.sub(r"\D", "", p)[-10:]
+        for p in phones
     }
 
-    # ---- bank accounts ----
+    # -------- bank accounts ----------
     raw_banks = BANK_REGEX.findall(text)
 
     banks = []
 
     for b in raw_banks:
-        # remove if matches a phone number
-        if b not in phone_digits:
+        # compare using last 10 digits
+        if b[-10:] not in phone_core_numbers:
             banks.append(b)
 
     upi = UPI_REGEX.findall(text)
@@ -53,7 +54,6 @@ def extract_intelligence(text: str):
         "phishingLinks": list(set(links)),
         "emailAddresses": list(set(emails)),
     }
-
 
 # -------------------------------------------------
 # MERGE SESSION DATA
